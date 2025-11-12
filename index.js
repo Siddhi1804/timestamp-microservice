@@ -1,57 +1,39 @@
 // index.js
-// where your node app starts
-
-// init project
 const express = require('express');
+const cors = require('cors');
 const app = express();
 
 // enable CORS so your API is remotely testable by FCC
-const cors = require('cors');
-app.use(cors({ optionsSuccessStatus: 200 })); // some legacy browsers choke on 204
+app.use(cors({ optionsSuccessStatus: 200 }));
 
 // serve static files
 app.use(express.static('public'));
 
 // root endpoint
-app.get("/", (req, res) => {
+app.get('/', (req, res) => {
   res.sendFile(__dirname + '/views/index.html');
 });
 
 // example API endpoint
-app.get("/api/hello", (req, res) => {
+app.get('/api/hello', (req, res) => {
   res.json({ greeting: 'hello API' });
 });
 
-// ------------------- Timestamp Microservice API -------------------
-app.get("/api/:date?", (req, res) => {
-  let dateString = req.params.date;
+// ------------------- Request Header Parser -------------------
+app.get('/api/whoami', (req, res) => {
+  // IP address
+  const ipaddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
-  // if no date provided, use current date
-  if (!dateString) {
-    const now = new Date();
-    return res.json({
-      unix: now.getTime(),
-      utc: now.toUTCString()
-    });
-  }
+  // language
+  const language = req.headers['accept-language'];
 
-  // if dateString is all digits, treat as unix milliseconds
-  let date;
-  if (/^\d+$/.test(dateString)) {
-    date = new Date(parseInt(dateString));
-  } else {
-    date = new Date(dateString);
-  }
+  // software (user-agent)
+  const software = req.headers['user-agent'];
 
-  // check for invalid date
-  if (date.toString() === "Invalid Date") {
-    return res.json({ error: "Invalid Date" });
-  }
-
-  // return unix timestamp and UTC string
   res.json({
-    unix: date.getTime(),
-    utc: date.toUTCString()
+    ipaddress: ipaddress,
+    language: language,
+    software: software
   });
 });
 
