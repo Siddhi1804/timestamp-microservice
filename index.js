@@ -1,157 +1,101 @@
-// index.js
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { randomBytes } = require("crypto");
+const dns = require("dns");
+const { URL } = require("url");
+const bodyParser = require("body-parser");
 
-require("dotenv").config();
 const app = express();
 
+// Basic Configuration
+const port = process.env.PORT || 3000;
+
 app.use(cors());
-app.use(express.urlencoded({ extended: false })); // for form POSTs
-app.use(express.json());
-app.use(express.static("public"));
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
+
+app.use("/public", express.static(${process.cwd()}/public));
 
 app.get("/", (req, res) => {
-  res.sendFile(__dirname + "/views/index.html");
+  res.sendFile(process.cwd() + "/views/index.html");
 });
 
-// In-memory stores
-const users = []; // { username, _id, log: [{ description, duration, date }] }
+// In-memory store: shortId -> originalUrl
+// Replace with a DB for persistence.
+const urlStore = new Map();
+let nextId = 1;
 
-function makeId() {
-  return randomBytes(8).toString("hex");
+/**
+ * Helper: validate URL format and host existence.
+ * Returns Promise that resolves host if valid or rejects with error.
+ */
+function validateUrlAndHost(input) {
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(input);
+    } catch (err) {
+      return reject(new Error("invalid url"));
+    }
+
+    // Only allow http or https
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return reject(new Error("invalid url"));
+    }
+
+    // dns.lookup requires hostname without port
+    const hostname = parsed.hostname;
+
+    dns.lookup(hostname, (err /*, address */) => {
+      if (err) return reject(new Error("invalid url"));
+      return resolve(hostname);
+    });
+  });
 }
 
-// Create user
-app.post("/api/users", (req, res) => {
-  const username = req.body.username;
-  if (!username) {
-    return res.status(400).json({ error: "username required" });
+// POST endpoint to create short url
+app.post("/api/shorturl", async (req, res) => {
+  const original_url = req.body.url || req.body.original_url || req.body.input;
+
+  if (!original_url) {
+    return res.json({ error: "invalid url" });
   }
 
-  // If user exists, return existing
-  const existing = users.find((u) => u.username === username);
-  if (existing) {
-    return res.json({ username: existing.username, _id: existing._id });
-  }
+  try {
+    await validateUrlAndHost(original_url);
 
-  const user = { username, _id: makeId(), log: [] };
-  users.push(user);
-  return res.json({ username: user.username, _id: user._id });
-});
-
-// List users
-app.get("/api/users", (req, res) => {
-  const list = users.map((u) => ({ username: u.username, _id: u._id }));
-  res.json(list);
-});
-
-// Add exercise
-app.post("/api/users/:_id/exercises", (req, res) => {
-  const userId = req.params._id;
-  const user = users.find((u) => u._id === userId);
-  if (!user) return res.status(400).json({ error: "unknown _id" });
-
-  const description = req.body.description;
-  const duration = req.body.duration;
-  let date = req.body.date;
-
-  if (!description || !duration) {
-    return res.status(400).json({ error: "description and duration required" });
-  }
-
-  // duration must be a number
-  const durationNum = Number(duration);
-  if (Number.isNaN(durationNum)) {
-    return res.status(400).json({ error: "duration must be a number" });
-  }
-
-  // if date not supplied, use current date
-  let dateObj;
-  if (!date) {
-    dateObj = new Date();
-  } else {
-    dateObj = new Date(date);
-    if (dateObj.toString() === "Invalid Date") {
-      return res.status(400).json({ error: "invalid date" });
+    // Check if already stored; return existing id if found
+    for (const [id, url] of urlStore.entries()) {
+      if (url === original_url) {
+        return res.json({ original_url, short_url: Number(id) });
+      }
     }
+
+    const id = String(nextId++);
+    urlStore.set(id, original_url);
+
+    return res.json({ original_url, short_url: Number(id) });
+  } catch (err) {
+    return res.json({ error: "invalid url" });
   }
-
-  const entry = {
-    description: String(description),
-    duration: durationNum,
-    date: dateObj.toDateString(),
-  };
-
-  user.log.push({
-    description: entry.description,
-    duration: entry.duration,
-    date: entry.date,
-  });
-
-  // Response: user object with exercise fields added
-  res.json({
-    _id: user._id,
-    username: user.username,
-    date: entry.date,
-    duration: entry.duration,
-    description: entry.description,
-  });
 });
 
-// Get logs with optional from, to, limit
-app.get("/api/users/:_id/logs", (req, res) => {
-  const userId = req.params._id;
-  const user = users.find((u) => u._id === userId);
-  if (!user) return res.status(400).json({ error: "unknown _id" });
-
-  let log = user.log.map((e) => ({
-    description: e.description,
-    duration: e.duration,
-    date: e.date,
-  }));
-
-  const { from, to, limit } = req.query;
-
-  if (from) {
-    const fromD = new Date(from);
-    if (fromD.toString() === "Invalid Date") {
-      return res.status(400).json({ error: "invalid from date" });
-    }
-    log = log.filter((e) => new Date(e.date) >= fromD);
-  }
-
-  if (to) {
-    const toD = new Date(to);
-    if (toD.toString() === "Invalid Date") {
-      return res.status(400).json({ error: "invalid to date" });
-    }
-    log = log.filter((e) => new Date(e.date) <= toD);
-  }
-
-  if (limit) {
-    const lim = Number(limit);
-    if (!Number.isInteger(lim) || lim < 1) {
-      return res.status(400).json({ error: "invalid limit" });
-    }
-    log = log.slice(0, lim);
-  }
-
-  res.json({
-    _id: user._id,
-    username: user.username,
-    count: log.length,
-    log: log,
-  });
+// Redirect endpoint
+app.get("/api/shorturl/:id", (req, res) => {
+  const id = String(req.params.id);
+  const original = urlStore.get(id);
+  if (!original)
+    return res
+      .status(404)
+      .json({ error: "No short URL found for given input" });
+  return res.redirect(original);
 });
 
-// 404
-app.use((req, res) => {
-  res.status(404).json({ error: "Not Found" });
+// simple test endpoint
+app.get("/api/hello", (req, res) => {
+  res.json({ greeting: "hello API" });
 });
 
-const listener = app.listen(process.env.PORT || 3000, () => {
-  console.log("Your app is listening on port " + listener.address().port);
+app.listen(port, () => {
+  console.log(Listening on port ${port});
 });
-
-module.exports = app;
